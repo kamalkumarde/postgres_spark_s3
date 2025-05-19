@@ -1,0 +1,1 @@
+Create table mytable(name varchar(100));

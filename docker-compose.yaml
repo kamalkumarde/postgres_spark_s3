@@ -1,0 +1,60 @@
+services:
+  db:
+    image: postgres:latest
+    restart: always
+    # set shared memory limit when using docker compose
+    shm_size: 128mb
+    # or set shared memory limit when deploy via swarm stack
+    volumes:
+     # - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+     # - ./data:/data:ro
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: hello
+      PGDATA: /var/lib/postgresql/data
+
+    ports:
+      - '5432:5432'
+    healthcheck: # Add a healthcheck
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  airflow:
+    image: apache/airflow:2.8.3-python3.11
+    restart: always
+    depends_on:
+       - db
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor # Changed from Local to LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:hello@db:5432 # Corrected port to 5432 and user
+      AIRFLOW_WWW_USER_CREATE: 'true'
+      AIRFLOW_WWW_USER_USERNAME: airflow
+      AIRFLOW_WWW_USER_PASSWORD: hello
+      AIRFLOW__WEBSERVER__RBAC: 'True'
+      AIRFLOW__WEBSERVER__EXPOSE_PORT: 8090
+      AIRFLOW__SCHEDULER__PARSING_PROCESSES: 2
+      AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.session #airflow.api.auth.backend.basicauth # Added session backend
+      AIRFLOW__API__AUTH_BASIC_USERNAME: postgres
+      AIRFLOW__API__AUTH_BASIC_PASSWORD: hello
+    command: > # Ensure Airflow DB is initialized.
+      bash -c "
+        airflow db init;
+        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com;
+        airflow scheduler &
+        airflow webserver --port 8090
+      "
+    ports:
+      - "8080:8090" # Changed from 8090:8090 to 8080:8080
+    healthcheck:
+      test: ["CMD-SHELL", "airflow db health"] # Add a healthcheck
+      interval: 30s
+      timeout: 30s
+      retries: 3    
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags # Added for airflow
+      - ./airflow/logs:/opt/airflow/logs  # Added for airflow
+      - ./airflow/plugins:/opt/airflow/plugins # Added for airflow
+      - ./python_scripts:/opt/airflow/python_scripts # Added for airflow    
