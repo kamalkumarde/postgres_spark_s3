@@ -1,0 +1,181 @@
+services:
+  localstack:
+    container_name: pipeline-localstack-1
+    image: localstack/localstack:3.7.2
+    ports:
+      - "127.0.0.1:4566:4566"
+    environment:
+      - SERVICES=s3,glue,athena
+      - DEBUG=1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - airflow-network
+
+  postgres:
+    image: postgres:14
+    restart: on-failure
+    container_name: postgres_container
+    environment:
+      - POSTGRES_DB=bootcamp_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=your_secure_password
+      - PG_DB_URL=jdbc:postgresql://postgres:5432/bootcamp_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./:/bootcamp/
+      - ./data.dump:/docker-entrypoint-initdb.d/data.dump
+      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+      - ./homework:/docker-entrypoint-initdb.d/homework
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - airflow-network
+
+  pgadmin:
+    image: dpage/pgadmin4
+    restart: on-failure
+    container_name: pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@admin.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - airflow-network
+
+  airflow-postgres:
+    image: postgres:14
+    restart: on-failure
+    container_name: airflow_postgres
+    environment:
+      - POSTGRES_DB=airflow_db
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+    ports:
+      - "5434:5432"
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    networks:
+      - airflow-network
+
+  airflow-webserver:
+    build:
+      context: ./docker/airflow
+      dockerfile: Dockerfile
+    container_name: pipeline-airflow-webserver-1
+    entrypoint: ["/entrypoint.sh"]
+    depends_on:
+      - airflow-postgres
+      - localstack
+      - spark-master
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow_db
+      - PYTHONPATH=/home/airflow/.local/lib/python3.12/site-packages:/home/airflow/.venv/lib/python3.12/site-packages:/opt/airflow
+      - TZ=Europe/Paris
+      - PG_DB_URL=jdbc:postgresql://postgres:5432/bootcamp_db
+      - PG_DB_TABLE=actor_films
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=your_secure_password
+      - S3_ENDPOINT_URL=http://localstack:4566
+      - S3_BUCKET=my-bucket
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./output:/opt/airflow/output
+      - ./dbt_project:/opt/airflow/dbt_project
+      - vscode_server:/home/airflow/.vscode-server
+      - ./docker/airflow/entrypoint.sh:/entrypoint.sh
+    ports:
+      - "8080:8080"
+    command: >
+      bash -c "source /home/airflow/.venv/bin/activate && airflow db migrate && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com && airflow webserver"
+    networks:
+      - airflow-network
+
+  airflow-scheduler:
+    build:
+      context: ./docker/airflow
+      dockerfile: Dockerfile
+    container_name: pipeline-airflow-scheduler-1
+    entrypoint: ["/entrypoint.sh"]
+    depends_on:
+      - airflow-postgres
+      - localstack
+      - spark-master
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@airflow-postgres:5432/airflow_db
+      - PYTHONPATH=/home/airflow/.local/lib/python3.12/site-packages:/home/airflow/.venv/lib/python3.12/site-packages:/opt/airflow
+      - TZ=Europe/Paris
+      - PG_DB_URL=jdbc:postgresql://postgres:5432/bootcamp_db
+      - PG_DB_TABLE=actor_films
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=your_secure_password
+      - S3_ENDPOINT_URL=http://localstack:4566
+      - S3_BUCKET=my-bucket
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./output:/opt/airflow/output
+      - ./dbt_project:/opt/airflow/dbt_project
+      - vscode_server:/home/airflow/.vscode-server
+      - ./docker/airflow/entrypoint.sh:/entrypoint.sh
+    command: >
+      bash -c "source /home/airflow/.venv/bin/activate && airflow scheduler"
+    networks:
+      - airflow-network
+
+  spark-master:
+    image: bitnami/spark:3.5.3
+    container_name: pipeline-spark-master-1
+    environment:
+      - SPARK_MODE=master
+      - S3_ENDPOINT_URL=http://localstack:4566
+      - S3_BUCKET=my-bucket
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    ports:
+      - "7077:7077"
+      - "8081:8080"
+    networks:
+      - airflow-network
+
+  spark-worker:
+    image: bitnami/spark:3.5.3
+    container_name: pipeline-spark-1
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - S3_ENDPOINT_URL=http://localstack:4566
+      - S3_BUCKET=my-bucket
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      - ./dags:/dags
+      - ./output:/opt/airflow/output
+    depends_on:
+      - spark-master
+    networks:
+      - airflow-network
+
+networks:
+  airflow-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  airflow_postgres_data:
+  localstack_data:
+  pgadmin_data:
+  vscode_server:

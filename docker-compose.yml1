@@ -1,0 +1,150 @@
+version: '3.8'
+services:
+  localstack:
+    container_name: localstack
+    image: localstack/localstack-pro:latest
+    ports:
+      - "127.0.0.1:4566:4566"
+    environment:
+      - SERVICES=s3,glue,athena
+      - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN}
+      - DEBUG=1
+    volumes:
+      - "./.localstack:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    networks:
+      - airflow-network
+
+  postgres:
+    image: postgres:14
+    restart: on-failure
+    container_name: ${DOCKER_CONTAINER}
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_DB=${POSTGRES_SCHEMA}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    ports:
+      - "${HOST_PORT}:5432"
+    volumes:
+      - ./:/bootcamp/
+      - ./data.dump:/docker-entrypoint-initdb.d/data.dump
+      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+      - ./homework:/docker-entrypoint-initdb.d/homework
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - airflow-network
+
+  pgadmin:
+    image: dpage/pgadmin4
+    restart: on-failure
+    container_name: pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD}
+    ports:
+      - "${PGADMIN_PORT}:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    networks:
+      - airflow-network
+
+  airflow-postgres:
+    image: postgres:14
+    restart: on-failure
+    container_name: airflow_postgres
+    environment:
+      - POSTGRES_DB=${AIRFLOW_POSTGRES_DB}
+      - POSTGRES_USER=${AIRFLOW_POSTGRES_USER}
+      - POSTGRES_PASSWORD=${AIRFLOW_POSTGRES_PASSWORD}
+    ports:
+      - "${AIRFLOW_HOST_PORT}:5432"
+    volumes:
+      - airflow-postgres-data:/var/lib/postgresql/data
+    networks:
+      - airflow-network
+
+  airflow-webserver:
+    image: apache/airflow:2.10.2
+    depends_on:
+      - airflow-postgres
+      - spark
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${AIRFLOW_POSTGRES_USER}:${AIRFLOW_POSTGRES_PASSWORD}@airflow-postgres:5432/${AIRFLOW_POSTGRES_DB}
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - PG_DB_URL=jdbc:postgresql://postgres:5432/${POSTGRES_SCHEMA}
+      - PG_DB_TABLE=${PG_DB_TABLE}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./output:/opt/airflow/output
+      - ./dbt_project:/opt/airflow/dbt_project
+    ports:
+      - "8080:8080"
+    command: >
+      bash -c "
+      pip install dbt-postgres psycopg2-binary &&
+      airflow db init &&
+      airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin &&
+      airflow webserver
+      "
+    networks:
+      - airflow-network
+
+  airflow-scheduler:
+    image: apache/airflow:2.10.2
+    depends_on:
+      - airflow-postgres
+      - spark
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${AIRFLOW_POSTGRES_USER}:${AIRFLOW_POSTGRES_PASSWORD}@airflow-postgres:5432/${AIRFLOW_POSTGRES_DB}
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - PG_DB_URL=jdbc:postgresql://postgres:5432/${POSTGRES_SCHEMA}
+      - PG_DB_TABLE=${PG_DB_TABLE}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./output:/opt/airflow/output
+      - ./dbt_project:/opt/airflow/dbt_project
+    command: >
+      bash -c "
+      pip install dbt-postgres psycopg2-binary &&
+      airflow scheduler
+      "
+    networks:
+      - airflow-network
+
+  spark:
+    image: bitnami/spark:3.5.3
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+    volumes:
+      - ./dags:/dags
+      - ./output:/opt/airflow/output
+    networks:
+      - airflow-network
+
+  spark-master:
+    image: bitnami/spark:3.5.3
+    environment:
+      - SPARK_MODE=master
+    ports:
+      - "7077:7077"
+      - "8081:8080"
+    networks:
+      - airflow-network
+
+networks:
+  airflow-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  pgadmin-data:
+  airflow-postgres-data:
