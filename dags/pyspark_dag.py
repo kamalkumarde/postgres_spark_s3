@@ -25,7 +25,10 @@ with DAG(
         task_id='run_pyspark_job',
         python_callable=lambda: os.system('/opt/spark/bin/spark-submit --master spark://spark-master:7077 /opt/airflow/dags/read_postgres.py'),
     )
+    print("Inside DAG" )
+    
     run_pyspark_job
+    print("Inside------DAG" )
 """
     run_dbt = BashOperator(
         task_id='run_dbt',
