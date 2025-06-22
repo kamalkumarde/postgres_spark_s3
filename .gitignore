@@ -1,1 +1,6 @@
+*.log.env
+airflow.cfg
 *.log
+__pycache__/
+.venv/
+docker-compose.yml
